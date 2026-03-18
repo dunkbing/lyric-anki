@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Download, Music } from "lucide-react";
+import { ArrowLeft, Clock, Download, ExternalLink, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { client } from "@/lib/api-client";
@@ -13,6 +13,18 @@ type BasicSong = {
   artistName: string;
   collectionName: string;
   artworkUrl100: string;
+  releaseDate?: string;
+  primaryGenreName?: string;
+  trackTimeMillis?: number;
+  previewUrl?: string;
+  trackViewUrl?: string;
+};
+
+type SongDetails = BasicSong & {
+  artworkUrl: string | null; // S3 URL once uploaded, null until then
+  genre?: string | null;
+  durationMs?: number | null;
+  itunesUrl?: string | null;
 };
 
 type LyricsData = {
@@ -24,6 +36,11 @@ type LyricsData = {
 const isJapanese = (text: string) =>
   /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/.test(text);
 
+function formatDuration(ms: number) {
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
 export default function SongPage({
   params,
 }: {
@@ -31,63 +48,90 @@ export default function SongPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const [basic, setBasic] = useState<BasicSong | null>(null);
+  const [details, setDetails] = useState<SongDetails | null>(null);
   const [lyrics, setLyrics] = useState<LyricsData | null>(null);
   const [lyricsError, setLyricsError] = useState("");
 
   // Read basic info from sessionStorage immediately
   useEffect(() => {
     const stored = sessionStorage.getItem(`song:${id}`);
-    if (stored) setBasic(JSON.parse(stored));
+    if (stored) {
+      const song: BasicSong = JSON.parse(stored);
+      setDetails({
+        ...song,
+        artworkUrl: song.artworkUrl100 ?? null, // temp: use iTunes URL until S3 resolves
+        genre: song.primaryGenreName,
+        durationMs: song.trackTimeMillis,
+        itunesUrl: song.trackViewUrl,
+      });
+    }
   }, [id]);
 
-  // Save to DB then fetch/process lyrics
+  // Process song — POST returns full data after lyrics are done
   useEffect(() => {
     const load = async () => {
-      // Upsert song metadata if we have it from sessionStorage
       const stored = sessionStorage.getItem(`song:${id}`);
+
+      let res: Response;
       if (stored) {
-        const song: BasicSong = JSON.parse(stored);
-        await client.api.song.$post({
+        const basic: BasicSong = JSON.parse(stored);
+        res = await client.api.song.$post({
           json: {
-            trackId: song.trackId,
-            trackName: song.trackName,
-            artistName: song.artistName,
-            collectionName: song.collectionName,
-            artworkUrl100: song.artworkUrl100,
+            trackId: basic.trackId,
+            trackName: basic.trackName,
+            artistName: basic.artistName,
+            collectionName: basic.collectionName ?? "",
+            artworkUrl100: basic.artworkUrl100 ?? "",
+            releaseDate: basic.releaseDate,
+            primaryGenreName: basic.primaryGenreName,
+            trackTimeMillis: basic.trackTimeMillis,
+            previewUrl: basic.previewUrl,
+            trackViewUrl: basic.trackViewUrl,
           },
         });
+      } else {
+        // Direct link — song must already be in DB
+        res = await client.api.song[":id"].$get({ param: { id } });
       }
 
-      // Fetch processed song (cached or triggers processing)
-      const res = await client.api.song[":id"].$get({ param: { id } });
       if (!res.ok) throw new Error();
       const data = await res.json();
       if ("error" in data) throw new Error();
-      const songData = data as {
+
+      const song = data as {
         id: string;
         trackName: string;
         artistName: string;
         collectionName: string;
-        artworkUrl: string;
+        artworkUrl: string | null;
+        releaseDate?: string | null;
+        genre?: string | null;
+        durationMs?: number | null;
+        previewUrl?: string | null;
+        itunesUrl?: string | null;
         lines: string[];
         translations: string[];
-        vocab: { front: string; back: string }[];
+        vocab: { front: string; back: string; pos?: string }[];
       };
-      // Fill basic from API response if sessionStorage was empty (e.g. direct link)
-      if (!stored) {
-        setBasic({
-          trackId: Number(songData.id),
-          trackName: songData.trackName,
-          artistName: songData.artistName,
-          collectionName: songData.collectionName,
-          artworkUrl100: songData.artworkUrl,
-        });
-      }
+
+      setDetails((prev) => ({
+        ...(prev ?? {
+          trackId: Number(song.id),
+          trackName: song.trackName,
+          artistName: song.artistName,
+          collectionName: song.collectionName,
+          artworkUrl100: song.artworkUrl ?? "",
+        }),
+        artworkUrl: song.artworkUrl,
+        genre: song.genre,
+        durationMs: song.durationMs,
+        itunesUrl: song.itunesUrl,
+      }));
+
       setLyrics({
-        lines: songData.lines,
-        translations: songData.translations,
-        vocab: songData.vocab,
+        lines: song.lines,
+        translations: song.translations,
+        vocab: song.vocab,
       });
     };
 
@@ -95,8 +139,8 @@ export default function SongPage({
   }, [id]);
 
   const handleExport = async () => {
-    if (!basic || !lyrics) return;
-    const deckName = `${basic.artistName} - ${basic.trackName}`;
+    if (!details || !lyrics) return;
+    const deckName = `${details.artistName} - ${details.trackName}`;
     const res = await client.api.export.$post({
       json: { deckName, vocab: lyrics.vocab },
     });
@@ -108,8 +152,6 @@ export default function SongPage({
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  const artworkUrl = basic?.artworkUrl100 ?? "";
 
   return (
     <div className="min-h-screen bg-background">
@@ -132,13 +174,13 @@ export default function SongPage({
           )}
         </div>
 
-        {/* Song info — shown immediately from sessionStorage */}
-        {basic ? (
+        {/* Song info */}
+        {details ? (
           <div className="flex items-center gap-4 mb-6">
-            {artworkUrl ? (
+            {details.artworkUrl ? (
               <img
-                src={artworkUrl.replace("100x100", "300x300")}
-                alt={basic.collectionName}
+                src={details.artworkUrl.replace("100x100", "300x300")}
+                alt={details.collectionName}
                 className="w-20 h-20 rounded-lg object-cover shrink-0 shadow"
               />
             ) : (
@@ -146,16 +188,45 @@ export default function SongPage({
                 <Music className="w-8 h-8 text-muted-foreground" />
               </div>
             )}
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1 className="text-xl font-bold leading-tight truncate">
-                {basic.trackName}
+                {details.trackName}
               </h1>
               <p className="text-sm text-muted-foreground truncate">
-                {basic.artistName}
+                {details.artistName}
               </p>
               <p className="text-xs text-muted-foreground truncate">
-                {basic.collectionName}
+                {details.collectionName}
               </p>
+              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                {details.genre && (
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                    {details.genre}
+                  </span>
+                )}
+                {details.durationMs && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {formatDuration(details.durationMs)}
+                  </span>
+                )}
+                {details.releaseDate && (
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(details.releaseDate).getFullYear()}
+                  </span>
+                )}
+                {details.itunesUrl && (
+                  <a
+                    href={details.itunesUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    iTunes
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         ) : (
@@ -164,11 +235,12 @@ export default function SongPage({
             <div className="space-y-2 flex-1">
               <div className="h-5 bg-muted rounded animate-pulse w-3/4" />
               <div className="h-4 bg-muted rounded animate-pulse w-1/2" />
+              <div className="h-3 bg-muted rounded animate-pulse w-1/3" />
             </div>
           </div>
         )}
 
-        {/* Lyrics / Vocab — loaded after processing */}
+        {/* Lyrics / Vocab */}
         {lyrics ? (
           <Tabs defaultValue="lyrics">
             <TabsList className="mb-4">

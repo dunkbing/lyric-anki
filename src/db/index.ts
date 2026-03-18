@@ -1,4 +1,9 @@
+import { SQL } from "bun";
 import { drizzle } from "drizzle-orm/bun-sql";
 import * as schema from "./schema";
 
-export const db = drizzle(process.env.DATABASE_URL!, { schema });
+const client = new SQL(process.env.DATABASE_URL!, {
+  tls: true,
+  prepare: false,
+});
+export const db = drizzle(client, { schema });

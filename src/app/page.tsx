@@ -1,26 +1,43 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Music, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { client } from "@/lib/api-client";
 
-type Song = {
+type SongResult = {
   trackId: number;
   trackName: string;
   artistName: string;
   collectionName: string;
-  artworkUrl100: string;
+  artworkUrl: string | null;
+  inDb: boolean;
+  // iTunes-only fields (present when inDb=false)
+  artworkUrl100?: string;
+  releaseDate?: string;
+  primaryGenreName?: string;
+  trackTimeMillis?: number;
+  previewUrl?: string;
+  trackViewUrl?: string;
 };
 
 export default function Home() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Song[]>([]);
+  const [results, setResults] = useState<SongResult[]>([]);
+  const [defaults, setDefaults] = useState<SongResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+
+  // Load default songs from DB on mount
+  useEffect(() => {
+    client.api.songs.$get().then(async (res) => {
+      const data = await res.json();
+      setDefaults(data.results as SongResult[]);
+    });
+  }, []);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,8 +48,9 @@ export default function Home() {
     try {
       const res = await client.api.search.$get({ query: { q: query } });
       const data = await res.json();
-      setResults(data.results);
-      if (!data.results.length) setSearchError("No songs found.");
+      const r = data.results as SongResult[];
+      setResults(r);
+      if (!r.length) setSearchError("No songs found.");
     } catch {
       setSearchError("Search failed. Please try again.");
     } finally {
@@ -40,10 +58,33 @@ export default function Home() {
     }
   };
 
-  const handleSelectSong = (song: Song) => {
-    sessionStorage.setItem(`song:${song.trackId}`, JSON.stringify(song));
-    router.push(`/song/${song.trackId}`);
+  const handleSelectSong = (song: SongResult) => {
+    if (song.inDb) {
+      // Already processed — navigate directly, song page will GET from DB
+      router.push(`/song/${song.trackId}`);
+    } else {
+      // New song — store iTunes metadata for song page to POST and process
+      sessionStorage.setItem(
+        `song:${song.trackId}`,
+        JSON.stringify({
+          trackId: song.trackId,
+          trackName: song.trackName,
+          artistName: song.artistName,
+          collectionName: song.collectionName,
+          artworkUrl100: song.artworkUrl100 ?? "",
+          releaseDate: song.releaseDate,
+          primaryGenreName: song.primaryGenreName,
+          trackTimeMillis: song.trackTimeMillis,
+          previewUrl: song.previewUrl,
+          trackViewUrl: song.trackViewUrl,
+        }),
+      );
+      router.push(`/song/${song.trackId}`);
+    }
   };
+
+  const displayed = results.length > 0 ? results : defaults;
+  const showingDefaults = results.length === 0 && defaults.length > 0 && !query;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -72,35 +113,42 @@ export default function Home() {
           <p className="text-destructive text-sm mb-4">{searchError}</p>
         )}
 
-        {results.length > 0 && (
-          <div className="space-y-2">
-            {results.map((song) => (
-              <button
-                key={song.trackId}
-                type="button"
-                onClick={() => handleSelectSong(song)}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-accent transition-colors text-left"
-              >
-                {song.artworkUrl100 ? (
-                  <img
-                    src={song.artworkUrl100}
-                    alt={song.collectionName}
-                    className="w-12 h-12 rounded object-cover shrink-0"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded bg-muted flex items-center justify-center shrink-0">
-                    <Music className="w-5 h-5 text-muted-foreground" />
+        {displayed.length > 0 && (
+          <>
+            {showingDefaults && (
+              <p className="text-xs text-muted-foreground mb-3">
+                Recently added
+              </p>
+            )}
+            <div className="space-y-2">
+              {displayed.map((song) => (
+                <button
+                  key={song.trackId}
+                  type="button"
+                  onClick={() => handleSelectSong(song)}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-accent transition-colors text-left"
+                >
+                  {song.artworkUrl ? (
+                    <img
+                      src={song.artworkUrl}
+                      alt={song.collectionName}
+                      className="w-12 h-12 rounded object-cover shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded bg-muted flex items-center justify-center shrink-0">
+                      <Music className="w-5 h-5 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium truncate">{song.trackName}</p>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {song.artistName} · {song.collectionName}
+                    </p>
                   </div>
-                )}
-                <div className="min-w-0">
-                  <p className="font-medium truncate">{song.trackName}</p>
-                  <p className="text-sm text-muted-foreground truncate">
-                    {song.artistName} · {song.collectionName}
-                  </p>
-                </div>
-              </button>
-            ))}
-          </div>
+                </button>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
