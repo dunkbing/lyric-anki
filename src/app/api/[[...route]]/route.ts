@@ -1,14 +1,8 @@
-import { handle } from "hono/vercel";
 import api from "@/api";
-import { Hono } from "hono";
+import { handle } from "hono/vercel";
 
-const app = new Hono();
-app.route("/api", api);
-
-const handlers = handle(app);
-
-export const GET = handlers;
-export const POST = handlers;
-export const PUT = handlers;
-export const PATCH = handlers;
-export const DELETE = handlers;
+export const GET = handle(api);
+export const POST = handle(api);
+export const PUT = handle(api);
+export const PATCH = handle(api);
+export const DELETE = handle(api);
