@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeft, Download, Music, Search } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Music, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { client } from "@/lib/api-client";
 
 type Song = {
@@ -15,29 +15,12 @@ type Song = {
   artworkUrl100: string;
 };
 
-type VocabItem = { front: string; back: string };
-
-type AppState =
-  | { view: "search" }
-  | {
-      view: "lyrics";
-      song: Song;
-      lines: string[];
-      translations: string[];
-      vocab: VocabItem[];
-    };
-
-const isJapanese = (text: string) =>
-  /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/.test(text);
-
 export default function Home() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
-  const [state, setState] = useState<AppState>({ view: "search" });
   const [searching, setSearching] = useState(false);
-  const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [searchError, setSearchError] = useState("");
-  const [lyricsError, setLyricsError] = useState("");
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,120 +40,10 @@ export default function Home() {
     }
   };
 
-  const handleSelectSong = async (song: Song) => {
-    setLoadingLyrics(true);
-    setLyricsError("");
-    try {
-      const res = await client.api.lyrics.$get({
-        query: { artist: song.artistName, title: song.trackName },
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      if ("error" in data) throw new Error();
-      setState({
-        view: "lyrics",
-        song,
-        lines: data.lines,
-        translations: data.translations,
-        vocab: data.vocab,
-      });
-    } catch {
-      setLyricsError("Could not find lyrics for this song.");
-    } finally {
-      setLoadingLyrics(false);
-    }
+  const handleSelectSong = (song: Song) => {
+    sessionStorage.setItem(`song:${song.trackId}`, JSON.stringify(song));
+    router.push(`/song/${song.trackId}`);
   };
-
-  const handleExport = async () => {
-    if (state.view !== "lyrics") return;
-    const { song, vocab } = state;
-    const deckName = `${song.artistName} - ${song.trackName}`;
-    const res = await client.api.export.$post({ json: { deckName, vocab } });
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${deckName.replace(/[^\w\s-]/g, "").trim()}.apkg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  if (state.view === "lyrics") {
-    return (
-      <div className="min-h-screen bg-background">
-        <div className="max-w-2xl mx-auto px-4 py-8">
-          <div className="flex items-center justify-between mb-6">
-            <button
-              type="button"
-              onClick={() => setState({ view: "search" })}
-              className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors text-sm"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back
-            </button>
-            <Button onClick={handleExport} className="flex items-center gap-2">
-              <Download className="w-4 h-4" />
-              Export to Anki ({state.vocab.length} cards)
-            </Button>
-          </div>
-
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold">{state.song.trackName}</h1>
-            <p className="text-muted-foreground">{state.song.artistName}</p>
-          </div>
-
-          <Tabs defaultValue="lyrics">
-            <TabsList className="mb-4">
-              <TabsTrigger value="lyrics">Lyrics</TabsTrigger>
-              <TabsTrigger value="vocab">
-                Vocabulary ({state.vocab.length})
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="lyrics">
-              <div className="space-y-3">
-                {state.lines.map((line, i) => (
-                  <div key={i}>
-                    <p
-                      className={`text-sm ${isJapanese(line) ? "font-medium" : "text-muted-foreground italic"}`}
-                    >
-                      {line}
-                    </p>
-                    {state.translations[i] && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {state.translations[i]}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-
-            <TabsContent value="vocab">
-              <div className="divide-y">
-                {state.vocab.map((item, i) => (
-                  <div
-                    key={i}
-                    className="flex items-baseline justify-between py-2 px-2"
-                  >
-                    <span className="text-base font-medium">{item.front}</span>
-                    <span className="text-sm text-muted-foreground">
-                      {item.back}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-          </Tabs>
-
-          <p className="text-xs text-muted-foreground mt-8">
-            Open the exported <strong>.apkg</strong> file directly in Anki to
-            import the deck.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -198,16 +71,8 @@ export default function Home() {
         {searchError && (
           <p className="text-destructive text-sm mb-4">{searchError}</p>
         )}
-        {lyricsError && (
-          <p className="text-destructive text-sm mb-4">{lyricsError}</p>
-        )}
-        {loadingLyrics && (
-          <p className="text-muted-foreground text-sm text-center py-8">
-            Loading lyrics...
-          </p>
-        )}
 
-        {results.length > 0 && !loadingLyrics && (
+        {results.length > 0 && (
           <div className="space-y-2">
             {results.map((song) => (
               <button
