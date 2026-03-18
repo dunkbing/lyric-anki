@@ -10,6 +10,7 @@ const geist = Geist({
 export const metadata: Metadata = {
   title: "LyricAnki",
   description: "Convert Japanese song lyrics to Anki flashcard decks",
+  icons: { icon: "/icon.svg" },
 };
 
 export default function RootLayout({
