@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Music, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Music } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { client } from "@/lib/api-client";
 
@@ -14,7 +13,6 @@ type SongResult = {
   collectionName: string;
   artworkUrl: string | null;
   inDb: boolean;
-  // iTunes-only fields (present when inDb=false)
   artworkUrl100?: string;
   releaseDate?: string;
   primaryGenreName?: string;
@@ -30,8 +28,8 @@ export default function Home() {
   const [defaults, setDefaults] = useState<SongResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load default songs from DB on mount
   useEffect(() => {
     client.api.songs.$get().then(async (res) => {
       const data = await res.json();
@@ -39,31 +37,38 @@ export default function Home() {
     });
   }, []);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-    setSearching(true);
-    setSearchError("");
-    setResults([]);
-    try {
-      const res = await client.api.search.$get({ query: { q: query } });
-      const data = await res.json();
-      const r = data.results as SongResult[];
-      setResults(r);
-      if (!r.length) setSearchError("No songs found.");
-    } catch {
-      setSearchError("Search failed. Please try again.");
-    } finally {
-      setSearching(false);
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!query.trim()) {
+      setResults([]);
+      setSearchError("");
+      return;
     }
-  };
+
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      setSearchError("");
+      try {
+        const res = await client.api.search.$get({ query: { q: query } });
+        const data = await res.json();
+        const r = data.results as SongResult[];
+        setResults(r);
+        if (!r.length) setSearchError("No songs found.");
+      } catch {
+        setSearchError("Search failed. Please try again.");
+      } finally {
+        setSearching(false);
+      }
+    }, 400);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query]);
 
   const handleSelectSong = (song: SongResult) => {
-    if (song.inDb) {
-      // Already processed — navigate directly, song page will GET from DB
-      router.push(`/song/${song.trackId}`);
-    } else {
-      // New song — store iTunes metadata for song page to POST and process
+    if (!song.inDb) {
       sessionStorage.setItem(
         `song:${song.trackId}`,
         JSON.stringify({
@@ -79,12 +84,12 @@ export default function Home() {
           trackViewUrl: song.trackViewUrl,
         }),
       );
-      router.push(`/song/${song.trackId}`);
     }
+    router.push(`/song/${song.trackId}`);
   };
 
-  const displayed = results.length > 0 ? results : defaults;
-  const showingDefaults = results.length === 0 && defaults.length > 0 && !query;
+  const displayed = query.trim() ? results : defaults;
+  const showingDefaults = !query.trim() && defaults.length > 0;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -96,18 +101,18 @@ export default function Home() {
           </p>
         </div>
 
-        <form onSubmit={handleSearch} className="flex gap-2 mb-6">
+        <div className="relative mb-6">
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search artist or song title..."
-            className="flex-1"
           />
-          <Button type="submit" disabled={searching}>
-            <Search className="w-4 h-4 mr-2" />
-            {searching ? "Searching..." : "Search"}
-          </Button>
-        </form>
+          {searching && (
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+              Searching...
+            </span>
+          )}
+        </div>
 
         {searchError && (
           <p className="text-destructive text-sm mb-4">{searchError}</p>
